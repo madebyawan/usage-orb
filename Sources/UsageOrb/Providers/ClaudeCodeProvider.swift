@@ -15,7 +15,8 @@ struct ClaudeCodeProvider: UsageProvider {
         do {
             return try await Self.fetch(token: token, now: now)
         } catch let error as ProviderError where error.kind == .auth {
-            // Rejected: Claude Code may have renewed its sign-in since. Read it again and retry once.
+            // Rejected. Only a renewed sign-in can hold a different token, so don't ask macOS for the same one.
+            guard Self.tokenCache.hasChanged(stamp: Keychain.modificationDate(service: Self.keychainService)) else { throw error }
             Self.tokenCache.clear()
             let fresh = try Self.cachedAccessToken(now: now)
             guard fresh != token else { throw error }
@@ -33,19 +34,29 @@ struct ClaudeCodeProvider: UsageProvider {
 
     // MARK: Credentials
 
-    /// Keeps the token in memory until it expires or Anthropic rejects it, so the Keychain is read rarely
-    /// and macOS doesn't ask on every refresh.
+    private static let keychainService = "Claude Code-credentials"
+    static let expiredMessage = "Claude Code's sign-in has expired. Run Claude Code once to renew it, then refresh."
+
+    /// Keeps the token in memory and reads the Keychain again only after Claude Code has rewritten the item,
+    /// because macOS may ask on every read. A failed read stays failed until then.
     private static let tokenCache = TokenCache()
 
     private static func cachedAccessToken(now: Date) throws -> String {
         if let token = tokenCache.token(now: now) { return token }
-        let (token, expiry) = try readAccessToken(now: now)
-        tokenCache.store(token, expiry: expiry)
-        return token
+        let stamp = Keychain.modificationDate(service: keychainService)
+        if let failure = tokenCache.knownFailure(stamp: stamp) { throw failure }
+        do {
+            let (token, expiry) = try readAccessToken(now: now)
+            tokenCache.store(token, expiry: expiry, stamp: stamp)
+            return token
+        } catch let error as ProviderError {
+            tokenCache.store(failure: error, stamp: stamp)
+            throw error
+        }
     }
 
     static func readAccessToken(now: Date) throws -> (token: String, expiry: Date?) {
-        let data = Keychain.readOtherApp(service: "Claude Code-credentials") ?? credentialsFile()
+        let data = Keychain.readOtherApp(service: keychainService) ?? credentialsFile()
         guard let data else {
             throw ProviderError.notConfigured("No Claude Code sign-in found. Sign in with `claude`, then refresh.")
         }
@@ -56,7 +67,7 @@ struct ClaudeCodeProvider: UsageProvider {
         }
         let expiry = JSON.date(oauth["expiresAt"])
         if let expiry, expiry <= now {
-            throw ProviderError.auth("Claude Code's sign-in has expired. Run Claude Code once to renew it, then refresh.")
+            throw ProviderError.auth(expiredMessage)
         }
         return (token, expiry)
     }
@@ -139,11 +150,15 @@ struct ClaudeCodeProvider: UsageProvider {
     }
 }
 
-/// The Claude Code token held between refreshes. Providers fetch concurrently, so access is locked.
-private final class TokenCache: @unchecked Sendable {
+/// The Claude Code token held between refreshes, and the Keychain item's modification date (`stamp`)
+/// from when it was read. A nil stamp means the date is unknown, so nothing can be ruled out.
+/// Providers fetch concurrently, so access is locked.
+final class TokenCache: @unchecked Sendable {
     private let lock = NSLock()
     private var token: String?
     private var expiry: Date?
+    private var stamp: Date?
+    private var failure: ProviderError?
 
     func token(now: Date) -> String? {
         lock.withLock {
@@ -152,11 +167,27 @@ private final class TokenCache: @unchecked Sendable {
         }
     }
 
-    func store(_ token: String, expiry: Date?) {
-        lock.withLock { (self.token, self.expiry) = (token, expiry) }
+    func store(_ token: String, expiry: Date?, stamp: Date?) {
+        lock.withLock { (self.token, self.expiry, self.stamp, failure) = (token, expiry, stamp, nil) }
+    }
+
+    func store(failure: ProviderError, stamp: Date?) {
+        lock.withLock { (token, expiry, self.stamp, self.failure) = (nil, nil, stamp, failure) }
+    }
+
+    func hasChanged(stamp: Date?) -> Bool {
+        lock.withLock { stamp == nil || stamp != self.stamp }
+    }
+
+    /// Why reading the Keychain would be pointless: the item is the one that already failed or expired.
+    func knownFailure(stamp: Date?) -> ProviderError? {
+        lock.withLock {
+            guard let stamp, stamp == self.stamp else { return nil }
+            return failure ?? .auth(ClaudeCodeProvider.expiredMessage)
+        }
     }
 
     func clear() {
-        lock.withLock { (token, expiry) = (nil, nil) }
+        lock.withLock { (token, expiry, stamp, failure) = (nil, nil, nil, nil) }
     }
 }

@@ -37,6 +37,17 @@ enum Keychain {
         return result as? Data
     }
 
+    /// When another app's item last changed. Only attributes are read, so macOS doesn't ask.
+    static func modificationDate(service: String) -> Date? {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                    kSecAttrService as String: service,
+                                    kSecReturnAttributes as String: true,
+                                    kSecMatchLimit as String: kSecMatchLimitOne]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+        return (result as? [String: Any])?[kSecAttrModificationDate as String] as? Date
+    }
+
     private static func baseQuery(_ provider: ProviderID) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: service,

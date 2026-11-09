@@ -8,6 +8,39 @@ final class ProviderParsingTests: XCTestCase {
         try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
     }
 
+    func testExpiredTokenIsNotReadAgainUntilTheItemChanges() {
+        let cache = TokenCache()
+        let stamp = now.addingTimeInterval(-100)
+        cache.store("token", expiry: now.addingTimeInterval(-1), stamp: stamp)
+        XCTAssertNil(cache.token(now: now))
+        XCTAssertEqual(cache.knownFailure(stamp: stamp)?.kind, .auth)
+        XCTAssertNil(cache.knownFailure(stamp: now), "A rewritten item is worth reading")
+    }
+
+    func testFailedReadIsRememberedUntilTheItemChanges() {
+        let cache = TokenCache()
+        let stamp = now.addingTimeInterval(-100)
+        cache.store(failure: .notConfigured("denied"), stamp: stamp)
+        XCTAssertEqual(cache.knownFailure(stamp: stamp), .notConfigured("denied"))
+        XCTAssertNil(cache.knownFailure(stamp: now))
+    }
+
+    func testRejectedTokenStaysCachedWhileTheItemIsUnchanged() {
+        let cache = TokenCache()
+        let stamp = now.addingTimeInterval(-100)
+        cache.store("token", expiry: now.addingTimeInterval(100), stamp: stamp)
+        XCTAssertFalse(cache.hasChanged(stamp: stamp))
+        XCTAssertTrue(cache.hasChanged(stamp: now))
+        XCTAssertEqual(cache.token(now: now), "token")
+    }
+
+    func testUnknownModificationDateRulesNothingOut() {
+        let cache = TokenCache()
+        cache.store(failure: .notConfigured("none"), stamp: nil)
+        XCTAssertNil(cache.knownFailure(stamp: nil))
+        XCTAssertTrue(cache.hasChanged(stamp: nil))
+    }
+
     func testClaudeLimitsList() throws {
         let object = try json("""
         {"five_hour": {"utilization": 7.0, "resets_at": "2026-10-18T20:39:59.614650+00:00"},

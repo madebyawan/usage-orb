@@ -41,7 +41,7 @@ OpenRouter gets a ring only when its key has a spend limit, because that's a rea
 
 Usage Orb never scrapes browser sessions.
 
-Codex is on by default because it only reads local files. Claude Code waits until you choose it under **Add Provider**, because macOS will ask whether Usage Orb may read Claude Code's Keychain item. Choose **Always Allow** to avoid being asked again (ad hoc builds may ask again after each rebuild).
+Codex is on by default because it only reads local files. Claude Code waits until you choose it under **Add Provider**, because macOS will ask whether Usage Orb may read Claude Code's Keychain item. Choose **Always Allow** to avoid being asked again (ad hoc builds may ask again after a rebuild or when Claude Code renews its sign-in).
 
 ## Build and run
 
